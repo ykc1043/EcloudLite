@@ -70,6 +70,22 @@
 
 会话与密码均按当前 Windows 用户使用 DPAPI 加密。配置默认位于程序目录 `data\settings.json`，日志默认位于 `data\logs\`。日志会尽量脱敏，但分享日志前仍应人工检查账号、网络地址和业务信息。
 
+## 创建 Release 包
+
+在项目根目录执行以下命令，会重新构建开源部分、运行离线自测，并在 `dist\` 生成 zip 和 SHA-256 文件：
+
+```powershell
+.\release.ps1 -Version 0.1.0
+```
+
+安装并登录 GitHub CLI 后，可以通过 Xray HTTP 代理推送标签并创建 GitHub Release：
+
+```powershell
+.\release.ps1 -Version 0.1.0 -Publish -Proxy http://127.0.0.1:10809
+```
+
+发布脚本只打包 `EcloudLite.exe`、SelfTest、固定兼容公钥和仓库声明文档，不包含官方 runtime、用户设置、日志或分析目录。
+
 ## 项目路线
 
 - [Step 1：接入官方 runtime](docs/ROADMAP.md#step-1接入官方-runtime)：当前阶段，优先实现和验证官方功能，同时保留 Lite 自有的会话、日志和诊断能力。
