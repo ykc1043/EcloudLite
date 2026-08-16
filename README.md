@@ -9,6 +9,7 @@
 - 源码许可证：MIT，详见 [LICENSE](LICENSE)。
 - 官方 CMSS runtime：不随源码仓库提供，不由 MIT 许可证覆盖。
 - 主要测试后端：`CMSSZTE`。
+- 公开仓库：<https://github.com/ykc1043/EcloudLite>。
 - Step 1 详细进度：[docs/ROADMAP.md](docs/ROADMAP.md)。
 - API、登录和连接链路记录：[docs/PROTOCOL_ANALYSIS.md](docs/PROTOCOL_ANALYSIS.md)。
 
@@ -36,7 +37,7 @@
 - 程序目录优先的配置、日志、CMSS profile 镜像和脱敏详细日志。
 - “关于”窗口显示兼容基线、移动云电脑版本和桌面协议版本。
 
-原生 renderer 已在另一台 Windows 电脑上验证可以显示官方云电脑画面，但键鼠、音频、退出提示、重连和不同后端兼容性仍未完成完整回归。具体勾选状态以 [docs/ROADMAP.md](docs/ROADMAP.md) 为准。
+原生 renderer 和 runtime 配置向导已在其他 Windows 电脑完成现场测试。键盘、鼠标、组合键、中文输入法、文本/文件剪贴板、扬声器、麦克风和网络中断后的重连均已验证可用。官方窗口内部的退出菜单和关闭窗口提示当前不可用，可使用 Lite 主程序的“断开云电脑”退出；电源操作、生命周期、显示模式和更广泛兼容矩阵仍需回归。具体勾选状态以 [docs/ROADMAP.md](docs/ROADMAP.md) 为准。
 
 ## 快速构建
 
@@ -79,6 +80,8 @@
 4. 登录后刷新并选择云电脑，再执行列表、状态或连接操作。
 5. 使用官方 runtime 时，选择 `CMSSZTE` 云电脑并点击“启动云电脑”；若 runtime 尚未配置，Lite 会先打开配置向导。Lite 的“断开云电脑”只结束本次渲染会话，不执行云电脑关机。
 
+当前已知限制：官方 renderer 窗口内部的“退出”和关闭窗口提示不可用。请先保存云电脑中的工作，再回到 Lite 主程序点击“断开云电脑”。
+
 会话与密码均按当前 Windows 用户使用 DPAPI 加密。配置默认位于程序目录 `data\settings.json`，日志默认位于 `data\logs\`。日志会尽量脱敏，但分享日志前仍应人工检查账号、网络地址和业务信息。
 
 ## 创建 Release 包
@@ -86,13 +89,13 @@
 在项目根目录执行以下命令，会重新构建开源部分、运行离线自测，并在 `dist\` 生成 zip 和 SHA-256 文件：
 
 ```powershell
-.\release.ps1 -Version 0.1.0
+.\release.ps1 -Version 0.1.1
 ```
 
 安装并登录 GitHub CLI 后，可以通过 Xray HTTP 代理推送标签并创建 GitHub Release：
 
 ```powershell
-.\release.ps1 -Version 0.1.0 -Publish -Proxy http://127.0.0.1:10809
+.\release.ps1 -Version 0.1.1 -Publish -Proxy http://127.0.0.1:10809
 ```
 
 发布脚本只打包 `EcloudLite.exe`、SelfTest、固定兼容公钥和仓库声明文档，不包含官方 runtime、用户设置、日志或分析目录。
