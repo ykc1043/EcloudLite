@@ -15,8 +15,12 @@ EcloudLite 是独立的兼容性研究项目，与中国移动或 `ecloud.10086.
 
 官方 runtime 文件不会包含在源码仓库中。用户必须自行从官方渠道取得客户端、接受适用条款，并自行判断在所在地区进行本地提取、调试或互操作研究是否合法。不要在 EcloudLite 的源码 release 中重新分发厂商二进制。
 
+EcloudLite 的运行组件配置向导只在用户明确操作后打开官方下载页、下载 7-Zip 或启动 7-Zip 安装程序。官方客户端安装包由用户自行选择，提取和依赖裁剪完全在本机执行；生成的 `cmss-runtime` 仍属于不受本项目 MIT License 覆盖的厂商组件集合。
+
 官方下载页面：<https://ecloud.10086.cn/api/query/clouddesktop/ccaorder/#/downloadAppPage>
 
 ## 平台库
 
 EcloudLite 以 Microsoft .NET Framework 4.8 为目标，使用 Windows 提供的框架程序集。这些程序集继续受 Microsoft 的适用许可约束。运行时加载的任何厂商组件继续受其各自许可证约束。
+
+运行组件配置向导可选择从 <https://www.7-zip.org/> 下载 7-Zip 官方 MSI，并调用用户安装的 `7z.exe` 解包。7-Zip 及其安装包适用 7-Zip 项目自己的许可证，不受 EcloudLite MIT License 覆盖。

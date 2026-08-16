@@ -22,6 +22,7 @@ namespace EcloudLite.UI
         private ConnectionService _connectionService;
         private PathBHandshakeService _pathBHandshakeService;
         private CmssLaunchService _cmssLaunchService;
+        private RuntimeSetupService _runtimeSetupService;
         private ConnectResult _lastConnectResult;
         private CmssLaunchResult _cmssSession;
 
@@ -104,7 +105,7 @@ namespace EcloudLite.UI
                 (_settings.SavedSessions.Count > 0 ? "未登录，可从本地会话快速切换" : "未登录"), false);
             SetAuthenticatedControls(false);
             UpdateLoginModeUi();
-            Shown += delegate { BeginAutomaticLogin(); };
+            Shown += MainFormShown;
             Logger.Info("UI", "main window initialized");
         }
 
@@ -115,7 +116,29 @@ namespace EcloudLite.UI
             _desktopService = new DesktopService(_client);
             _connectionService = new ConnectionService();
             _pathBHandshakeService = new PathBHandshakeService();
-            _cmssLaunchService = new CmssLaunchService(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "cmss-runtime"), _settings.DeviceUid);
+            _runtimeSetupService = new RuntimeSetupService(AppDomain.CurrentDomain.BaseDirectory);
+            _cmssLaunchService = new CmssLaunchService(_runtimeSetupService.RuntimeDirectory, _settings.DeviceUid);
+        }
+
+        private void MainFormShown(object sender, EventArgs e)
+        {
+            string reason;
+            if (!RuntimeSetupService.IsRuntimeReady(_runtimeSetupService.RuntimeDirectory, out reason))
+            {
+                Logger.Warn("RUNTIME_SETUP", "runtime missing at startup reason=" + reason);
+                DialogResult choice = MessageBox.Show(
+                    this,
+                    "未检测到云电脑运行组件（" + reason + "）。\r\n\r\n登录、云电脑列表和资源管理仍可使用；启动云电脑前需要从官方安装包提取 runtime。是否现在配置？",
+                    "需要配置运行组件",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Information);
+                if (choice == DialogResult.Yes) ShowRuntimeSetup();
+            }
+            else
+            {
+                Logger.Info("RUNTIME_SETUP", "runtime ready at startup path=" + _runtimeSetupService.RuntimeDirectory);
+            }
+            BeginAutomaticLogin();
         }
 
         private void MigrateLegacySession()
@@ -690,6 +713,9 @@ namespace EcloudLite.UI
                 using (AboutForm about = new AboutForm()) about.ShowDialog(this);
             };
             header.Controls.Add(aboutButton);
+            Button runtimeButton = MakeButton("运行组件", 790, 178, 96);
+            runtimeButton.Click += delegate { ShowRuntimeSetup(); };
+            header.Controls.Add(runtimeButton);
 
             SplitContainer mainSplit = new SplitContainer
             {
@@ -1169,6 +1195,13 @@ namespace EcloudLite.UI
                 SetStatus("当前原生渲染器仅支持 CMSSZTE", true);
                 return;
             }
+            string runtimeReason;
+            if (!RuntimeSetupService.IsRuntimeReady(_runtimeSetupService.RuntimeDirectory, out runtimeReason))
+            {
+                Logger.Warn("RUNTIME_SETUP", "renderer launch blocked; reason=" + runtimeReason);
+                SetStatus("运行组件尚未配置：" + runtimeReason, true);
+                if (!ShowRuntimeSetup()) return;
+            }
             if (_cmssSession != null && _cmssSession.IsRunning)
             {
                 SetStatus("已有原生云电脑会话在运行，PID=" + _cmssSession.ProcessId, true);
@@ -1209,6 +1242,18 @@ namespace EcloudLite.UI
                         result.SocketPort),
                         false);
                 });
+        }
+
+        private bool ShowRuntimeSetup()
+        {
+            Logger.Info("RUNTIME_SETUP", "runtime setup window opened");
+            using (RuntimeSetupForm form = new RuntimeSetupForm(_runtimeSetupService))
+                form.ShowDialog(this);
+            string reason;
+            bool ready = RuntimeSetupService.IsRuntimeReady(_runtimeSetupService.RuntimeDirectory, out reason);
+            Logger.Info("RUNTIME_SETUP", "runtime setup window closed ready=" + ready + "; reason=" + reason);
+            if (ready) SetStatus("云电脑运行组件已就绪", false);
+            return ready;
         }
 
         private void DisconnectClicked(object sender, EventArgs e)

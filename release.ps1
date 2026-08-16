@@ -57,7 +57,7 @@ try {
         '',
         'Public preview built from the open-source repository. This package does not contain the official CMSS runtime, official installers, account data, tokens, verification codes, logs, or local settings.',
         '',
-        'Without the official runtime, login, desktop listing, and local session management remain available. Starting a CMSSZTE desktop renderer requires a runtime obtained by the user from the official installer.',
+        'Without the official runtime, login, desktop listing, and local session management remain available. On first run, the built-in setup wizard can locally extract the minimum CMSS runtime from an official Windows installer selected by the user.',
         '',
         'This project is not an official China Mobile client. Read DISCLAIMER.md and THIRD_PARTY_NOTICES.md before use.'
     )

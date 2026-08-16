@@ -35,6 +35,7 @@ namespace EcloudLite
                 TestPathBProtocol();
                 TestCmssLaunchCrypto();
                 TestMissingCmssRuntimeMessage();
+                TestRuntimeSetupSupport();
                 TestCmssControlServer();
                 TestCmssSessionLifecycle();
                 TestProtectedSettings();
@@ -230,6 +231,42 @@ namespace EcloudLite
                     exception.Message.Contains("登录、云电脑列表和会话管理仍可使用");
             }
             Assert("cmss_missing_runtime_message", clearMessage);
+        }
+
+        private static void TestRuntimeSetupSupport()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "EcloudLite-selftest-runtime-" + Guid.NewGuid().ToString("N"));
+            string runtime = Path.Combine(root, "cmss-runtime");
+            try
+            {
+                string reason;
+                Assert("runtime_setup_empty_rejected", !RuntimeSetupService.IsRuntimeReady(runtime, out reason));
+                string[] required =
+                {
+                    Path.Combine("client", "uSmartView_VDI_Client.exe"),
+                    Path.Combine("client", "vdconn.dll"),
+                    Path.Combine("client", "BasicFunc.dll"),
+                    Path.Combine("client", "platforms", "qwindows.dll"),
+                    Path.Combine("client", "cmsszte-public.pem")
+                };
+                for (int i = 0; i < required.Length; i++)
+                {
+                    string file = Path.Combine(runtime, required[i]);
+                    Directory.CreateDirectory(Path.GetDirectoryName(file));
+                    File.WriteAllBytes(file, new byte[] { 1 });
+                }
+                Assert("runtime_setup_required_files_accepted", RuntimeSetupService.IsRuntimeReady(runtime, out reason));
+                Assert("runtime_setup_official_url", RuntimeSetupService.OfficialDownloadPage.StartsWith("https://ecloud.10086.cn/", StringComparison.Ordinal));
+                Assert("runtime_setup_7zip_url", RuntimeSetupService.SevenZipDownloadUrl.StartsWith("https://www.7-zip.org/", StringComparison.Ordinal));
+
+                string executable = System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName;
+                List<string> closure = PeDependencyResolver.Resolve(Path.GetDirectoryName(executable), new[] { executable }, null);
+                Assert("runtime_setup_pe_parser", closure.Exists(delegate(string file) { return string.Equals(file, executable, StringComparison.OrdinalIgnoreCase); }));
+            }
+            finally
+            {
+                try { if (Directory.Exists(root)) Directory.Delete(root, true); } catch { }
+            }
         }
 
         private static void TestCmssControlServer()

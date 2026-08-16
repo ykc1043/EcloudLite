@@ -13,6 +13,9 @@
 # Proprietary/runtime extraction and research workspaces
 /analysis/
 /**/cmss-runtime/
+/**/cmss-runtime.build-*/
+/**/cmss-runtime.backup-*/
+/**/runtime-setup/
 
 # Local state, credentials and diagnostics
 /data/
