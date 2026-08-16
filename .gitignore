@@ -1,0 +1,36 @@
+# Build and release output
+/dist/
+/.clean-build*/
+/*.zip
+/*.7z
+/*.rar
+/*setup*.exe
+/*installer*.exe
+*.exe
+*.dll
+*.pdb
+
+# Proprietary/runtime extraction and research workspaces
+/analysis/
+/**/cmss-runtime/
+
+# Local state, credentials and diagnostics
+/data/
+/**/data/
+/**/logs/
+/**/log/
+/**/settings.json
+/**/settings.json.*
+*.out.txt
+*.err.txt
+*.log
+*.dmp
+*.trace
+
+# IDE and operating-system files
+/.vs/
+/.vscode/
+*.suo
+*.user
+Thumbs.db
+.DS_Store
