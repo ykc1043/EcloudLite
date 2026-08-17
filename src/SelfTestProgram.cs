@@ -33,6 +33,7 @@ namespace EcloudLite
                 TestLoginPayloads();
                 TestCsapCrypto();
                 TestPathBProtocol();
+                TestKeepAliveDefaults();
                 TestCmssLaunchCrypto();
                 TestMissingCmssRuntimeMessage();
                 TestRuntimeSetupSupport();
@@ -176,6 +177,24 @@ namespace EcloudLite
             Assert("pathb_heart_parse", frames.Count == 1 && frames[0].Type == 0x74 && frames[0].Serial == 81);
             Assert("pathb_heart_ack_shape", BitConverter.ToString(PathBProtocol.HeartAck(81)).Replace("-", string.Empty).ToLowerInvariant() == "5100000000000000790001000000000000000000");
             Assert("pathb_agent_heartbeat_shape", PathBProtocol.AgentHeartbeat(100).Length == 36);
+        }
+
+        private static void TestKeepAliveDefaults()
+        {
+            Assert("keepalive_heart_listen_default", KeepAliveService.HeartListenSeconds == 60);
+            Assert("keepalive_round_interval_default", KeepAliveService.RoundIntervalSeconds == 300);
+            PathBHandshakeResult result = new PathBHandshakeResult
+            {
+                ZtecOk = true,
+                AuthOk = true,
+                TlsOk = true,
+                RedqOk = true,
+                TicketOk = true,
+                HeartCount = 2
+            };
+            Assert("keepalive_requires_two_hearts", result.HeartKeepAliveOk);
+            result.HeartCount = 1;
+            Assert("keepalive_rejects_one_heart", !result.HeartKeepAliveOk);
         }
 
         private static void TestCmssLaunchCrypto()

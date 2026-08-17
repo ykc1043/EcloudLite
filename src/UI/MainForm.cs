@@ -21,6 +21,7 @@ namespace EcloudLite.UI
         private DesktopService _desktopService;
         private ConnectionService _connectionService;
         private PathBHandshakeService _pathBHandshakeService;
+        private KeepAliveService _keepAliveService;
         private CmssLaunchService _cmssLaunchService;
         private RuntimeSetupService _runtimeSetupService;
         private ConnectResult _lastConnectResult;
@@ -40,6 +41,7 @@ namespace EcloudLite.UI
         private Button _uptimeButton;
         private Button _connectButton;
         private Button _handshakeButton;
+        private Button _keepAliveButton;
         private Button _launchButton;
         private Button _disconnectButton;
         private Label _accountLabel;
@@ -54,6 +56,7 @@ namespace EcloudLite.UI
         private Button _deleteSessionButton;
         private Label _statusLabel;
         private Label _backendLabel;
+        private Label _keepAliveStatusLabel;
         private DataGridView _desktopGrid;
         private RichTextBox _logBox;
 
@@ -116,6 +119,8 @@ namespace EcloudLite.UI
             _desktopService = new DesktopService(_client);
             _connectionService = new ConnectionService();
             _pathBHandshakeService = new PathBHandshakeService();
+            _keepAliveService = new KeepAliveService(_connectionService, _pathBHandshakeService, _desktopService);
+            _keepAliveService.StatusChanged += KeepAliveStatusChanged;
             _runtimeSetupService = new RuntimeSetupService(AppDomain.CurrentDomain.BaseDirectory);
             _cmssLaunchService = new CmssLaunchService(_runtimeSetupService.RuntimeDirectory, _settings.DeviceUid);
         }
@@ -285,6 +290,7 @@ namespace EcloudLite.UI
         {
             SavedSession session = SelectedSavedSession();
             if (session == null) return;
+            StopKeepAlive("switch saved session", false);
             ClearConnectSession();
             _client.ClearToken();
             _desktopGrid.Rows.Clear();
@@ -382,6 +388,7 @@ namespace EcloudLite.UI
 
         private void ShowSessionExpired(SavedSession session)
         {
+            StopKeepAlive("saved session expired", false);
             if (session != null)
             {
                 session.ProtectedToken = string.Empty;
@@ -739,7 +746,7 @@ namespace EcloudLite.UI
             Panel desktopPanel = new Panel { Dock = DockStyle.Fill, BackColor = Color.White, Padding = new Padding(12) };
             mainSplit.Panel1.Controls.Add(desktopPanel);
 
-            Panel toolbar = new Panel { Dock = DockStyle.Top, Height = 110, BackColor = Color.White };
+            Panel toolbar = new Panel { Dock = DockStyle.Top, Height = 138, BackColor = Color.White };
             desktopPanel.Controls.Add(toolbar);
             _refreshButton = MakeButton("刷新", 0, 5, 76);
             _refreshButton.Click += RefreshClicked;
@@ -764,11 +771,15 @@ namespace EcloudLite.UI
             _handshakeButton.Enabled = false;
             toolbar.Controls.Add(_handshakeButton);
 
-            _launchButton = MakeButton("启动云电脑", 248, 43, 112);
+            _keepAliveButton = MakeButton("开始保活", 248, 43, 112);
+            _keepAliveButton.Click += KeepAliveClicked;
+            toolbar.Controls.Add(_keepAliveButton);
+
+            _launchButton = MakeButton("启动云电脑", 368, 43, 112);
             _launchButton.Click += LaunchClicked;
             toolbar.Controls.Add(_launchButton);
 
-            _disconnectButton = MakeButton("断开云电脑", 368, 43, 112);
+            _disconnectButton = MakeButton("断开云电脑", 488, 43, 112);
             _disconnectButton.Click += DisconnectClicked;
             _disconnectButton.Enabled = false;
             toolbar.Controls.Add(_disconnectButton);
@@ -784,6 +795,18 @@ namespace EcloudLite.UI
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
             };
             toolbar.Controls.Add(_backendLabel);
+
+            _keepAliveStatusLabel = new Label
+            {
+                Text = "保活：未启动（单设备，监听 60 秒，间隔 300 秒）",
+                AutoEllipsis = true,
+                TextAlign = ContentAlignment.MiddleLeft,
+                ForeColor = Color.FromArgb(62, 73, 86),
+                Location = new Point(0, 106),
+                Size = new Size(1066, 24),
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            };
+            toolbar.Controls.Add(_keepAliveStatusLabel);
 
             _desktopGrid = new DataGridView
             {
@@ -1030,6 +1053,7 @@ namespace EcloudLite.UI
 
         private void LogoutClicked(object sender, EventArgs e)
         {
+            StopKeepAlive("logout", false);
             RunOperation<object>(
                 "logout",
                 delegate { _loginService.Logout(); return null; },
@@ -1154,6 +1178,11 @@ namespace EcloudLite.UI
 
         private void HandshakeClicked(object sender, EventArgs e)
         {
+            if (_keepAliveService != null && _keepAliveService.IsRunning)
+            {
+                SetStatus("请先停止保活，再建立测试会话", true);
+                return;
+            }
             if (_lastConnectResult == null || _lastConnectResult.Parameters == null)
             {
                 SetStatus("请先获取短期连接参数", true);
@@ -1186,8 +1215,61 @@ namespace EcloudLite.UI
                 });
         }
 
+        private void KeepAliveClicked(object sender, EventArgs e)
+        {
+            if (_keepAliveService.IsRunning)
+            {
+                StopKeepAlive("user clicked stop", false);
+                SetStatus("正在停止保活；当前连接通常会在 2 秒内退出...", false);
+                return;
+            }
+
+            Desktop desktop = SelectedDesktop();
+            if (desktop == null) { SetStatus("请选择一台云电脑", true); return; }
+            if (!string.Equals(desktop.OriginCompanyCode, "CMSSZTE", StringComparison.OrdinalIgnoreCase))
+            {
+                SetStatus("保活当前仅支持 CMSSZTE 后端", true);
+                return;
+            }
+            if (_cmssSession != null && _cmssSession.IsRunning)
+            {
+                SetStatus("请先断开正在运行的云电脑窗口，再启动保活", true);
+                return;
+            }
+
+            DialogResult choice = MessageBox.Show(
+                this,
+                "保活会绑定当前选中的单台云电脑，立即建立真实 Path B 会话；每轮监听并回复心跳 60 秒，等待 300 秒后重新获取短期参数。\r\n\r\n该操作可能中断其他设备上的连接。是否继续？",
+                "启动单设备保活",
+                MessageBoxButtons.OKCancel,
+                MessageBoxIcon.Warning);
+            if (choice != DialogResult.OK)
+            {
+                Logger.Info("PATHB_KEEPALIVE", "keepalive start cancelled by user");
+                return;
+            }
+
+            try
+            {
+                ClearConnectSession();
+                _keepAliveService.Start(desktop);
+                SetAuthenticatedControls(true);
+                SetStatus("保活已启动：正在进行第 1 轮连接；无需官方 runtime", false);
+            }
+            catch (Exception ex)
+            {
+                Logger.Exception("PATHB_KEEPALIVE", ex, "keepalive start failed");
+                SetStatus("保活启动失败：" + Logger.Redact(ex.Message), true);
+            }
+        }
+
         private void LaunchClicked(object sender, EventArgs e)
         {
+            if (_keepAliveService != null && _keepAliveService.IsRunning)
+            {
+                SetStatus("请先停止保活，再启动云电脑窗口", true);
+                return;
+            }
             Desktop desktop = SelectedDesktop();
             if (desktop == null) { SetStatus("请选择一台云电脑", true); return; }
             if (!string.Equals(desktop.OriginCompanyCode, "CMSSZTE", StringComparison.OrdinalIgnoreCase))
@@ -1235,6 +1317,7 @@ namespace EcloudLite.UI
                     _cmssSession = result;
                     result.Ended += CmssSessionEnded;
                     _launchButton.Enabled = false;
+                    _keepAliveButton.Enabled = false;
                     _disconnectButton.Enabled = result.IsRunning;
                     SetStatus(string.Format(
                         "原生渲染器已启动：PID {0}，控制端口 {1}（production_claim=false）",
@@ -1282,6 +1365,7 @@ namespace EcloudLite.UI
             if (ReferenceEquals(_cmssSession, session)) _cmssSession = null;
             _disconnectButton.Enabled = false;
             _launchButton.Enabled = _client.HasToken;
+            _keepAliveButton.Enabled = _client.HasToken;
             SetStatus("已断开云电脑", false);
         }
 
@@ -1294,8 +1378,53 @@ namespace EcloudLite.UI
                 if (ReferenceEquals(_cmssSession, ended)) _cmssSession = null;
                 _disconnectButton.Enabled = false;
                 _launchButton.Enabled = _client.HasToken;
+                _keepAliveButton.Enabled = _client.HasToken;
                 if (!IsDisposed && !Disposing) SetStatus("云电脑窗口已退出", false);
             });
+        }
+
+        private void KeepAliveStatusChanged(KeepAliveStatus status)
+        {
+            SafeBeginInvoke(delegate
+            {
+                bool running = status.Running;
+                _keepAliveButton.Text = running ? (status.StopRequested ? "正在停止" : "停止保活") : "开始保活";
+                _keepAliveButton.Enabled = running ? !status.StopRequested :
+                    (_client.HasToken && (_cmssSession == null || !_cmssSession.IsRunning));
+                _handshakeButton.Enabled = !running && _client.HasToken && _lastConnectResult != null &&
+                    _lastConnectResult.Parameters != null;
+                _launchButton.Enabled = !running && _client.HasToken && (_cmssSession == null || !_cmssSession.IsRunning);
+                _keepAliveStatusLabel.Text = FormatKeepAliveStatus(status);
+                _keepAliveStatusLabel.ForeColor = status.FailedRounds > 0 && status.SuccessfulRounds == 0
+                    ? Color.FromArgb(174, 47, 47)
+                    : Color.FromArgb(55, 83, 103);
+                if (!running && status.Round > 0)
+                    SetStatus("保活已停止；最后连接：" + status.LastConnection, status.SuccessfulRounds == 0);
+            });
+        }
+
+        private static string FormatKeepAliveStatus(KeepAliveStatus status)
+        {
+            string next = status.NextRoundLocal.HasValue ? status.NextRoundLocal.Value.ToString("HH:mm:ss") : "-";
+            string lastSuccess = status.LastSuccessLocal.HasValue ? status.LastSuccessLocal.Value.ToString("HH:mm:ss") : "-";
+            return string.Format(
+                "保活：{0} | {1} | 第 {2} 轮 | 本轮/累计心跳 {3}/{4} | 成功 {5} 失败 {6} | 最近成功 {7} | 下次 {8} | 最后连接：{9}",
+                status.Running ? status.Stage : "已停止",
+                string.IsNullOrEmpty(status.MachineName) ? "未绑定" : status.MachineName,
+                status.Round,
+                status.HeartsThisRound,
+                status.TotalHearts,
+                status.SuccessfulRounds,
+                status.FailedRounds,
+                lastSuccess,
+                next,
+                status.LastConnection ?? "-");
+        }
+
+        private void StopKeepAlive(string reason, bool waitForExit)
+        {
+            if (_keepAliveService == null || !_keepAliveService.IsRunning) return;
+            _keepAliveService.Stop(reason, waitForExit);
         }
 
         private Desktop SelectedDesktop()
@@ -1358,6 +1487,7 @@ namespace EcloudLite.UI
 
         private void SetBusy(bool busy)
         {
+            bool keepAliveRunning = _keepAliveService != null && _keepAliveService.IsRunning;
             UseWaitCursor = busy;
             _loginButton.Enabled = !busy && !_client.HasToken;
             _logoutButton.Enabled = !busy && _client.HasToken;
@@ -1367,8 +1497,9 @@ namespace EcloudLite.UI
             _restartButton.Enabled = !busy && _client.HasToken;
             _uptimeButton.Enabled = !busy && _client.HasToken;
             _connectButton.Enabled = !busy && _client.HasToken;
-            _handshakeButton.Enabled = !busy && _client.HasToken && _lastConnectResult != null && _lastConnectResult.Parameters != null;
-            _launchButton.Enabled = !busy && _client.HasToken && (_cmssSession == null || !_cmssSession.IsRunning);
+            _handshakeButton.Enabled = !busy && !keepAliveRunning && _client.HasToken && _lastConnectResult != null && _lastConnectResult.Parameters != null;
+            _keepAliveButton.Enabled = keepAliveRunning || (!busy && _client.HasToken && (_cmssSession == null || !_cmssSession.IsRunning));
+            _launchButton.Enabled = !busy && !keepAliveRunning && _client.HasToken && (_cmssSession == null || !_cmssSession.IsRunning);
             _disconnectButton.Enabled = !busy && _cmssSession != null && _cmssSession.IsRunning;
             _verifyButton.Enabled = !busy && !_client.HasToken && _challenge != AuthChallengeType.None;
             _sendCodeButton.Enabled = !busy && !_client.HasToken &&
@@ -1389,6 +1520,7 @@ namespace EcloudLite.UI
 
         private void SetAuthenticatedControls(bool authenticated)
         {
+            bool keepAliveRunning = _keepAliveService != null && _keepAliveService.IsRunning;
             _loginButton.Enabled = !authenticated;
             _logoutButton.Enabled = authenticated;
             _refreshButton.Enabled = authenticated;
@@ -1397,8 +1529,9 @@ namespace EcloudLite.UI
             _restartButton.Enabled = authenticated;
             _uptimeButton.Enabled = authenticated;
             _connectButton.Enabled = authenticated;
-            _handshakeButton.Enabled = authenticated && _lastConnectResult != null && _lastConnectResult.Parameters != null;
-            _launchButton.Enabled = authenticated && (_cmssSession == null || !_cmssSession.IsRunning);
+            _handshakeButton.Enabled = authenticated && !keepAliveRunning && _lastConnectResult != null && _lastConnectResult.Parameters != null;
+            _keepAliveButton.Enabled = keepAliveRunning || (authenticated && (_cmssSession == null || !_cmssSession.IsRunning));
+            _launchButton.Enabled = authenticated && !keepAliveRunning && (_cmssSession == null || !_cmssSession.IsRunning);
             _disconnectButton.Enabled = authenticated && _cmssSession != null && _cmssSession.IsRunning;
             UpdateLoginModeUi();
         }
@@ -1450,6 +1583,12 @@ namespace EcloudLite.UI
 
         private void MainFormClosed(object sender, FormClosedEventArgs e)
         {
+            if (_keepAliveService != null)
+            {
+                _keepAliveService.StatusChanged -= KeepAliveStatusChanged;
+                StopKeepAlive("main window closed", true);
+                _keepAliveService.Dispose();
+            }
             ClearConnectSession();
             if (_cmssSession != null)
             {

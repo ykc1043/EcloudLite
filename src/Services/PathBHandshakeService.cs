@@ -24,13 +24,36 @@ namespace EcloudLite.Services
         public int RedqBytes { get; set; }
         public int PostTicketBytes { get; set; }
         public long ElapsedMilliseconds { get; set; }
+        public bool Cancelled { get; set; }
 
         public bool Success { get { return ZtecOk && AuthOk && TlsOk && RedqOk && TicketOk; } }
+        public bool HeartKeepAliveOk { get { return Success && HeartCount >= 2; } }
     }
 
     internal sealed class PathBHandshakeService
     {
         public PathBHandshakeResult Probe(ConnectResult connect)
+        {
+            return Execute(connect, 26000, true, null, null, "PATHB");
+        }
+
+        public PathBHandshakeResult KeepAliveRound(
+            ConnectResult connect,
+            int durationMs,
+            Func<bool> shouldStop,
+            Action<PathBHandshakeResult> progress)
+        {
+            if (durationMs < 1000) throw new ArgumentOutOfRangeException("durationMs");
+            return Execute(connect, durationMs, false, shouldStop, progress, "PATHB_KEEPALIVE");
+        }
+
+        private static PathBHandshakeResult Execute(
+            ConnectResult connect,
+            int durationMs,
+            bool stopAfterTwoHearts,
+            Func<bool> shouldStop,
+            Action<PathBHandshakeResult> progress,
+            string logCategory)
         {
             if (connect == null) throw new ArgumentNullException("connect");
             if (string.IsNullOrEmpty(connect.CagHost) || connect.CagPort <= 0) throw new InvalidOperationException("CAG 目标缺失");
@@ -44,28 +67,32 @@ namespace EcloudLite.Services
             SslStream tls = null;
             try
             {
-                Logger.Info("PATHB", "stage=tcp_connect start cag_port=" + connect.CagPort);
+                ThrowIfStopped(shouldStop);
+                Logger.Info(logCategory, "stage=tcp_connect start cag_port=" + connect.CagPort);
                 client = Connect(connect.CagHost, connect.CagPort, 5000);
                 client.NoDelay = true;
                 network = client.GetStream();
-                Logger.Info("PATHB", "stage=tcp_connect ok elapsed_ms=" + total.ElapsedMilliseconds);
+                Logger.Info(logCategory, "stage=tcp_connect ok elapsed_ms=" + total.ElapsedMilliseconds);
 
+                ThrowIfStopped(shouldStop);
                 Write(network, packets.Ztec50);
                 byte[] ack50 = ReadExact(network, 50, 5000);
                 result.ZtecOk = ack50.Length == 50 && StartsWithAscii(ack50, "ZTEC");
-                Logger.Info("PATHB", "stage=ztec50 recv=" + ack50.Length + " ok=" + result.ZtecOk + " elapsed_ms=" + total.ElapsedMilliseconds);
+                Logger.Info(logCategory, "stage=ztec50 recv=" + ack50.Length + " ok=" + result.ZtecOk + " elapsed_ms=" + total.ElapsedMilliseconds);
                 if (!result.ZtecOk) throw new InvalidOperationException("ZTEC50 确认失败");
 
+                ThrowIfStopped(shouldStop);
                 Write(network, packets.Auth220);
                 byte[] ack36 = ReadExact(network, 36, 5000);
                 result.AuthOk = ack36.Length == 36;
-                Logger.Info("PATHB", "stage=auth220 recv=" + ack36.Length + " ok=" + result.AuthOk + " elapsed_ms=" + total.ElapsedMilliseconds);
+                Logger.Info(logCategory, "stage=auth220 recv=" + ack36.Length + " ok=" + result.AuthOk + " elapsed_ms=" + total.ElapsedMilliseconds);
                 if (!result.AuthOk) throw new InvalidOperationException("auth220 确认失败");
 
                 Write(network, packets.Client116);
                 byte[] preTls = ReadAvailable(network, 400, 400, 4096);
-                Logger.Debug("PATHB", "stage=pre_tls_116 recv=" + preTls.Length);
+                Logger.Debug(logCategory, "stage=pre_tls_116 recv=" + preTls.Length);
 
+                ThrowIfStopped(shouldStop);
                 tls = new SslStream(network, false, ValidateServerCertificate);
                 Stopwatch tlsWatch = Stopwatch.StartNew();
                 // This machine's .NET Framework rejects SslProtocols.None before ClientHello.
@@ -74,40 +101,45 @@ namespace EcloudLite.Services
                 tls.AuthenticateAsClient(connect.CagHost, null, SslProtocols.Tls12, false);
                 result.TlsOk = tls.IsAuthenticated && tls.IsEncrypted;
                 result.TlsVersion = tls.SslProtocol.ToString();
-                Logger.Info("PATHB", "stage=tls ok=" + result.TlsOk + " protocol=" + result.TlsVersion + " elapsed_ms=" + tlsWatch.ElapsedMilliseconds);
+                Logger.Info(logCategory, "stage=tls ok=" + result.TlsOk + " protocol=" + result.TlsVersion + " elapsed_ms=" + tlsWatch.ElapsedMilliseconds);
                 if (!result.TlsOk) throw new InvalidOperationException("TLS 握手未建立加密通道");
 
                 Write(tls, packets.Client108);
                 byte[] after108 = ReadAvailable(tls, 500, 500, 8192);
-                Logger.Debug("PATHB", "stage=client108 sent=" + packets.Client108.Length + " recv=" + after108.Length);
+                Logger.Debug(logCategory, "stage=client108 sent=" + packets.Client108.Length + " recv=" + after108.Length);
 
                 Write(tls, packets.Header163);
                 byte[] afterHeader = ReadAvailable(tls, 300, 300, 8192);
-                Logger.Debug("PATHB", "stage=redq_header sent=" + packets.Header163.Length + " recv=" + afterHeader.Length);
+                Logger.Debug(logCategory, "stage=redq_header sent=" + packets.Header163.Length + " recv=" + afterHeader.Length);
 
                 Write(tls, packets.Redq163);
                 byte[] redq = ReadAvailable(tls, 2000, 400, 65536);
                 result.RedqBytes = redq.Length;
                 result.RedqOk = redq.Length >= 100 && ContainsAscii(redq, "REDQ");
-                Logger.Info("PATHB", "stage=redq recv=" + redq.Length + " ok=" + result.RedqOk + " elapsed_ms=" + total.ElapsedMilliseconds);
+                Logger.Info(logCategory, "stage=redq recv=" + redq.Length + " ok=" + result.RedqOk + " elapsed_ms=" + total.ElapsedMilliseconds);
                 if (!result.RedqOk) throw new InvalidOperationException("REDQ 服务端响应未通过验证");
 
+                ThrowIfStopped(shouldStop);
                 Write(tls, packets.Header128);
                 Write(tls, new byte[128]);
                 byte[] postTicket = ReadAvailable(tls, 1500, 400, 65536);
                 result.PostTicketBytes = postTicket.Length;
                 result.TicketOk = true;
-                Logger.Info("PATHB", "stage=ticket128 mode=zeros sent=132 recv=" + postTicket.Length + " elapsed_ms=" + total.ElapsedMilliseconds);
+                Logger.Info(logCategory, "stage=ticket128 mode=zeros sent=132 recv=" + postTicket.Length + " elapsed_ms=" + total.ElapsedMilliseconds);
 
                 byte[] nudge = PathBProtocol.AgentHeartbeat(100);
                 Write(tls, PathBProtocol.VendorHeader(nudge.Length));
                 Write(tls, nudge);
-                Logger.Info("PATHB", "stage=heart_listen start seconds=26 nudge_len=" + (nudge.Length + 4));
-                ListenForHearts(tls, result, postTicket, 26000);
-                Logger.Info("PATHB", "stage=heart_listen complete hearts=" + result.HeartCount + " frames=" + result.FrameCount + " elapsed_ms=" + total.ElapsedMilliseconds);
+                Logger.Info(logCategory, "stage=heart_listen start seconds=" + (durationMs / 1000.0).ToString("0.0") +
+                    " nudge_len=" + (nudge.Length + 4) + " stop_after_two=" + stopAfterTwoHearts);
+                ListenForHearts(tls, result, postTicket, durationMs, stopAfterTwoHearts, shouldStop, progress, logCategory);
+                Logger.Info(logCategory, "stage=heart_listen complete hearts=" + result.HeartCount + " frames=" + result.FrameCount +
+                    " cancelled=" + result.Cancelled + " elapsed_ms=" + total.ElapsedMilliseconds);
 
                 result.ElapsedMilliseconds = total.ElapsedMilliseconds;
-                Logger.Info("PATHB", "probe complete success=" + result.Success + " heart_observed=" + (result.HeartCount > 0) + " elapsed_ms=" + result.ElapsedMilliseconds + " production_claim=false");
+                Logger.Info(logCategory, "session complete success=" + result.Success + " heart_keepalive_ok=" + result.HeartKeepAliveOk +
+                    " heart_observed=" + (result.HeartCount > 0) + " cancelled=" + result.Cancelled +
+                    " elapsed_ms=" + result.ElapsedMilliseconds + " production_claim=false");
                 return result;
             }
             finally
@@ -119,7 +151,15 @@ namespace EcloudLite.Services
             }
         }
 
-        private static void ListenForHearts(SslStream tls, PathBHandshakeResult result, byte[] initial, int durationMs)
+        private static void ListenForHearts(
+            SslStream tls,
+            PathBHandshakeResult result,
+            byte[] initial,
+            int durationMs,
+            bool stopAfterTwoHearts,
+            Func<bool> shouldStop,
+            Action<PathBHandshakeResult> progress,
+            string logCategory)
         {
             List<byte> buffer = new List<byte>();
             if (initial != null && initial.Length > 0) buffer.AddRange(initial);
@@ -127,6 +167,11 @@ namespace EcloudLite.Services
             HashSet<ulong> acknowledged = new HashSet<ulong>();
             while (watch.ElapsedMilliseconds < durationMs)
             {
+                if (IsStopped(shouldStop))
+                {
+                    result.Cancelled = true;
+                    break;
+                }
                 int remaining = durationMs - (int)watch.ElapsedMilliseconds;
                 byte[] chunk = ReadAvailable(tls, Math.Min(1500, Math.Max(100, remaining)), 300, 65536);
                 if (chunk.Length > 0) buffer.AddRange(chunk);
@@ -141,10 +186,24 @@ namespace EcloudLite.Services
                     Write(tls, ack);
                     acknowledged.Add(frame.Serial);
                     result.HeartCount++;
-                    Logger.Info("PATHB", "heart ack type=0x79 serial=" + frame.Serial + " ack_len=" + (ack.Length + 4) + " count=" + result.HeartCount);
+                    Logger.Info(logCategory, "heart ack type=0x79 serial=" + frame.Serial + " ack_len=" + (ack.Length + 4) +
+                        " count=" + result.HeartCount + " listen_elapsed_ms=" + watch.ElapsedMilliseconds);
+                    if (progress != null) progress(result);
                 }
-                if (result.HeartCount >= 2) break;
+                if (stopAfterTwoHearts && result.HeartCount >= 2) break;
             }
+        }
+
+        private static void ThrowIfStopped(Func<bool> shouldStop)
+        {
+            if (IsStopped(shouldStop)) throw new OperationCanceledException("Path B 会话已取消");
+        }
+
+        private static bool IsStopped(Func<bool> shouldStop)
+        {
+            if (shouldStop == null) return false;
+            try { return shouldStop(); }
+            catch { return false; }
         }
 
         private static TcpClient Connect(string host, int port, int timeoutMs)

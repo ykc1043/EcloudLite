@@ -59,6 +59,8 @@ try {
         '',
         'Without the official runtime, login, desktop listing, and local session management remain available. On first run, the built-in setup wizard can locally extract the minimum CMSS runtime from an official Windows installer selected by the user.',
         '',
+        'This build includes single-device CMSSZTE Path B keepalive with detailed redacted logs. Long-duration effectiveness still requires validation on an authorized cloud desktop; production_claim remains false.',
+        '',
         'This project is not an official China Mobile client. Read DISCLAIMER.md and THIRD_PARTY_NOTICES.md before use.'
     )
     Set-Content -LiteralPath $notes -Encoding UTF8 -Value $releaseNotes
