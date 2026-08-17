@@ -87,7 +87,7 @@ CMSSZTE 桌面的 `customLoginParams` 包含 CAG 地址列表和 `csapip`/`csapi
 
 这部分是实验性协议探测，不等同于官方完整 renderer。尤其是显示通道的 surface 初始化、输入通道、音频通道、流控、重连和多后端差异仍未完整实现，因此不能将握手成功表述为完整桌面兼容。
 
-在 Step 1 的官方 runtime 模式下，现场已经验证键盘、鼠标、组合键、中文输入法、文本及文件剪贴板、扬声器、麦克风和网络中断后的重连可用。这些能力由官方 renderer/runtime 提供，不代表 Lite 已经独立实现对应 SPICE 通道。官方窗口内部的退出菜单和关闭窗口提示当前不可用，现阶段使用 Lite 主程序的“断开云电脑”结束渲染会话。
+在 Step 1 的官方 runtime 模式下，现场已经验证键盘、鼠标、组合键、中文输入法、文本及文件剪贴板、扬声器、麦克风和网络中断后的重连可用。这些能力由官方 renderer/runtime 提供，不代表 Lite 已经独立实现对应 SPICE 通道。现场日志表明 renderer 在第三方客户端控制模式下，会使用外层 type `1010`、内层 `msg_type=10` 的 JSON 帧发送 toolbar action。Lite 将 `minimize` 转发为 renderer 主窗口最小化，并将 `quit`、`exit`、`disconnect` 统一映射到断开确认、精确 PID 清理和状态恢复流程。断开确认框使用 renderer 的原生窗口句柄作为 owner，以便在全屏或前台云电脑窗口之上显示。
 
 ## 官方 CMSS runtime 编排
 
@@ -113,7 +113,7 @@ Step 1 通过用户本地取得的官方 `uSmartView_VDI_Client.exe` 负责实�
 ## 未解决问题
 
 - 非 `CMSSZTE` 后端的实际连接。
-- 官方 renderer 的内部退出菜单、关闭窗口提示、显示模式、多显示器和异常生命周期行为。
+- 官方 renderer 的重启/关机/锁屏 toolbar action、显示模式、多显示器和异常生命周期行为。
 - 不依赖官方 runtime 的开源显示和输入实现。
 - 单设备 Path B 保活在不同网络、账号策略和数小时/数天周期下的现场有效性；当前实现仍保持 `production_claim=false`。
 - 不同服务端版本、区域和政企账号策略的兼容性矩阵。

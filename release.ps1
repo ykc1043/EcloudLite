@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^\d+\.\d+(\.\d+)?$')]
+    [ValidatePattern('^\d+\.\d+(\.\d+)?([A-Za-z][0-9A-Za-z.-]*)?$')]
     [string]$Version,
 
     [switch]$Publish,
@@ -16,6 +16,13 @@ $tag = 'v' + $Version
 $stage = Join-Path $dist ('release-' + $tag)
 $archive = Join-Path $dist ('EcloudLite-' + $tag + '-win-net48.zip')
 $notes = Join-Path $stage 'RELEASE_NOTES.md'
+$appInfoText = Get-Content -LiteralPath (Join-Path $project 'src\Infrastructure\AppInfo.cs') -Raw
+if ($appInfoText -notmatch 'LiteVersion\s*=\s*"([^"]+)"') {
+    throw 'Unable to read LiteVersion from AppInfo.cs'
+}
+if ($Matches[1] -ne $Version) {
+    throw "Release version $Version does not match AppInfo.LiteVersion $($Matches[1])"
+}
 
 function Require-Success([string]$Step) {
     if ($LASTEXITCODE -ne 0) {
@@ -40,6 +47,7 @@ try {
         (Join-Path $dist 'EcloudLite.exe'),
         (Join-Path $dist 'EcloudLite.SelfTest.exe'),
         (Join-Path $dist 'cmsszte-public.pem'),
+        (Join-Path $project 'clear-logs.bat'),
         (Join-Path $project 'README.md'),
         (Join-Path $project 'LICENSE'),
         (Join-Path $project 'DISCLAIMER.md'),

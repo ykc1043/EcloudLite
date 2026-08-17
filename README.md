@@ -33,12 +33,12 @@
 - 云电脑列表、状态、后端识别、开机、关机、重启和在线时长接口。
 - CMSSZTE CAG 连接参数获取、Path B 握手探测和心跳 ACK 探测。
 - 不依赖官方 runtime 的单设备 Path B 保活：60 秒心跳监听、300 秒轮询、在线时长佐证、实时统计和最终连接摘要。
-- 调用用户本地官方 CMSS renderer，包含启动、Lite 侧断开和精确 PID 清理。
+- 调用用户本地官方 CMSS renderer，包含启动、Lite 侧断开、toolbar 最小化/关闭动作桥接和精确 PID 清理。
 - 缺少 runtime 时自动提示，并可从用户自行下载的官方安装包本地提取约 146 MiB 的最小运行组件。
 - 程序目录优先的配置、日志、CMSS profile 镜像和脱敏详细日志。
 - “关于”窗口显示兼容基线、移动云电脑版本和桌面协议版本。
 
-原生 renderer 和 runtime 配置向导已在其他 Windows 电脑完成现场测试。键盘、鼠标、组合键、中文输入法、文本/文件剪贴板、扬声器、麦克风和网络中断后的重连均已验证可用。官方窗口内部的退出菜单和关闭窗口提示当前不可用，可使用 Lite 主程序的“断开云电脑”退出；电源操作、生命周期、显示模式和更广泛兼容矩阵仍需回归。具体勾选状态以 [docs/ROADMAP.md](docs/ROADMAP.md) 为准。
+原生 renderer 和 runtime 配置向导已在其他 Windows 电脑完成现场测试。键盘、鼠标、组合键、中文输入法、文本/文件剪贴板、扬声器、麦克风和网络中断后的重连均已验证可用。`v0.1.3` 已接入 renderer 发给第三方客户端的 toolbar action：最小化转发给原生窗口，两个退出入口复用 Lite 的断开确认和清理流程。断开确认框以 renderer 窗口作为 owner，显示在当前云电脑窗口之上。电源操作、生命周期、显示模式和更广泛兼容矩阵仍需回归。具体勾选状态以 [docs/ROADMAP.md](docs/ROADMAP.md) 为准。
 
 ## 快速构建
 
@@ -84,25 +84,27 @@
 
 “建立测试会话”仍保留原有的一次性 26 秒/最多 2 个心跳探测行为。保活则每轮持续监听 60 秒，回复服务端 `0x74` 心跳并在轮次结束后等待 300 秒，再重新获取短期连接参数。在线时长查询只作为 HTTP 侧佐证；在完成真实环境长时间回归前，日志继续标记 `production_claim=false`。
 
-当前已知限制：官方 renderer 窗口内部的“退出”和关闭窗口提示不可用。请先保存云电脑中的工作，再回到 Lite 主程序点击“断开云电脑”。
+当前已知限制：退出菜单中的重启、关机、锁屏仍未接入，帮助、设置和切换也暂不处理。请先保存云电脑中的工作；如 renderer 控件异常，仍可回到 Lite 主程序点击“断开云电脑”。
 
 会话与密码均按当前 Windows 用户使用 DPAPI 加密。配置默认位于程序目录 `data\settings.json`，日志默认位于 `data\logs\`。日志会尽量脱敏，但分享日志前仍应人工检查账号、网络地址和业务信息。
+
+调试前可以先关闭 EcloudLite，再运行程序目录中的 `clear-logs.bat`。该脚本会清理 `data\logs\` 和 `cmss-runtime\log\` 中的日志文件，不删除 `settings.json`、本地会话、下载工具或 `cmss-runtime` 运行组件本身。
 
 ## 创建 Release 包
 
 在项目根目录执行以下命令，会重新构建开源部分、运行离线自测，并在 `dist\` 生成 zip 和 SHA-256 文件：
 
 ```powershell
-.\release.ps1 -Version 0.1.2
+.\release.ps1 -Version 0.1.3
 ```
 
 安装并登录 GitHub CLI 后，可以通过 Xray HTTP 代理推送标签并创建 GitHub Release：
 
 ```powershell
-.\release.ps1 -Version 0.1.2 -Publish -Proxy http://127.0.0.1:10809
+.\release.ps1 -Version 0.1.3 -Publish -Proxy http://127.0.0.1:10809
 ```
 
-发布脚本只打包 `EcloudLite.exe`、SelfTest、固定兼容公钥和仓库声明文档，不包含官方 runtime、用户设置、日志或分析目录。
+发布脚本只打包 `EcloudLite.exe`、SelfTest、日志清理脚本、固定兼容公钥和仓库声明文档，不包含官方 runtime、用户设置、日志或分析目录。
 
 ## 项目路线
 

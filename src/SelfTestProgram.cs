@@ -291,34 +291,59 @@ namespace EcloudLite
         private static void TestCmssControlServer()
         {
             CmssControlServer server = new CmssControlServer("selftest-machine", "CMSSZTE");
+            List<string> toolbarActions = new List<string>();
+            using (System.Threading.AutoResetEvent toolbarActionReceived = new System.Threading.AutoResetEvent(false))
+            {
+                server.ToolbarActionReceived += delegate(string action)
+                {
+                    lock (toolbarActions) toolbarActions.Add(action);
+                    toolbarActionReceived.Set();
+                };
             int port = server.Start();
             try
             {
                 byte[] json = System.Text.Encoding.UTF8.GetBytes("{\"id\":\"selftest-machine\",\"companyCode\":\"CMSSZTE\",\"data\":null}");
-                List<byte> inner = new List<byte>();
-                inner.AddRange(BitConverter.GetBytes((uint)1));
-                inner.AddRange(BitConverter.GetBytes((uint)json.Length));
-                inner.AddRange(json);
-                List<byte> wire = new List<byte>();
-                foreach (byte value in inner)
-                {
-                    if (value == 0x0e) { wire.Add(0x0e); wire.Add(0x01); }
-                    else if (value == 0x0d) { wire.Add(0x0e); wire.Add(0x02); }
-                    else wire.Add(value);
-                }
-                wire.Add(0x0d);
                 using (TcpClient client = new TcpClient("127.0.0.1", port))
                 {
-                    client.GetStream().Write(wire.ToArray(), 0, wire.Count);
-                    System.Threading.Thread.Sleep(150);
+                    WriteCmssControlFrame(client, 1, json);
+                    byte[] minimize = System.Text.Encoding.UTF8.GetBytes(
+                        "{\"companyCode\":\"CMSSZTE\",\"id\":\"selftest-machine\",\"data\":{\"msg_type\":10,\"msg_data\":{\"action\":\"minimize\"}}}");
+                    WriteCmssControlFrame(client, 1010, minimize);
+                    Assert("cmss_control_minimize_event", toolbarActionReceived.WaitOne(1500));
+                    byte[] quit = System.Text.Encoding.UTF8.GetBytes(
+                        "{\"companyCode\":\"CMSSZTE\",\"id\":\"selftest-machine\",\"data\":{\"msg_type\":10,\"msg_data\":{\"action\":\"quit\"}}}");
+                    WriteCmssControlFrame(client, 1010, quit);
+                    Assert("cmss_control_quit_event", toolbarActionReceived.WaitOne(1500));
                 }
-                FieldInfo hearts = typeof(CmssControlServer).GetField("_heartbeats", BindingFlags.Instance | BindingFlags.NonPublic);
-                Assert("cmss_control_heart_received", (int)hearts.GetValue(server) == 1);
+                Assert("cmss_control_heart_received", server.HeartbeatCount == 1);
+                lock (toolbarActions)
+                {
+                    Assert("cmss_control_toolbar_action_count", toolbarActions.Count == 2);
+                    Assert("cmss_control_toolbar_actions", toolbarActions[0] == "minimize" && toolbarActions[1] == "quit");
+                }
             }
             finally
             {
                 server.Dispose();
             }
+            }
+        }
+
+        private static void WriteCmssControlFrame(TcpClient client, uint type, byte[] json)
+        {
+            List<byte> inner = new List<byte>();
+            inner.AddRange(BitConverter.GetBytes(type));
+            inner.AddRange(BitConverter.GetBytes((uint)json.Length));
+            inner.AddRange(json);
+            List<byte> wire = new List<byte>();
+            foreach (byte value in inner)
+            {
+                if (value == 0x0e) { wire.Add(0x0e); wire.Add(0x01); }
+                else if (value == 0x0d) { wire.Add(0x0e); wire.Add(0x02); }
+                else wire.Add(value);
+            }
+            wire.Add(0x0d);
+            client.GetStream().Write(wire.ToArray(), 0, wire.Count);
         }
 
         private static void TestCmssSessionLifecycle()
@@ -440,6 +465,7 @@ namespace EcloudLite
 
         private static void TestAppInfo()
         {
+            Assert("about_lite_version", AppInfo.LiteVersion == "0.1.3");
             Assert("about_client_baseline", AppInfo.ClientBaseline == "V3.8.4.v22607211406");
             Assert("about_cloud_version", AppInfo.CloudComputerVersion == "V3.8.4.v2");
             Assert("about_desktop_protocol", AppInfo.DesktopProtocolVersion == "V11.250625/V1.2.251014/V2.3.2.0.0");

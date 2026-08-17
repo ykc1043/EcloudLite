@@ -30,7 +30,7 @@ namespace EcloudLite.UI
 
             Label version = new Label
             {
-                Text = "Lite " + AppInfo.LiteVersion,
+                Text = "Lite v" + AppInfo.LiteVersion,
                 ForeColor = Color.FromArgb(74, 85, 99),
                 AutoSize = true,
                 Location = new Point(27, 58)

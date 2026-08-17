@@ -14,6 +14,15 @@ namespace EcloudLite.UI
 {
     internal sealed class MainForm : Form
     {
+        private sealed class WindowHandleOwner : IWin32Window
+        {
+            private readonly IntPtr _handle;
+
+            public WindowHandleOwner(IntPtr handle) { _handle = handle; }
+
+            public IntPtr Handle { get { return _handle; } }
+        }
+
         private readonly SettingsStore _settingsStore = new SettingsStore();
         private AppSettings _settings;
         private EcloudApiClient _client;
@@ -67,6 +76,7 @@ namespace EcloudLite.UI
         private int _smsCooldown;
         private bool _autoLoginStarted;
         private bool _loadingSessionProfile;
+        private int _runtimeDisconnectRequestPending;
         private readonly System.Windows.Forms.Timer _smsTimer = new System.Windows.Forms.Timer();
 
         public MainForm()
@@ -1291,6 +1301,8 @@ namespace EcloudLite.UI
             }
             if (_cmssSession != null)
             {
+                if (_cmssSession.ControlServer != null)
+                    _cmssSession.ControlServer.ToolbarActionReceived -= CmssToolbarActionReceived;
                 _cmssSession.Ended -= CmssSessionEnded;
                 _cmssSession.Dispose();
                 _cmssSession = null;
@@ -1316,6 +1328,8 @@ namespace EcloudLite.UI
                 {
                     _cmssSession = result;
                     result.Ended += CmssSessionEnded;
+                    if (result.ControlServer != null)
+                        result.ControlServer.ToolbarActionReceived += CmssToolbarActionReceived;
                     _launchButton.Enabled = false;
                     _keepAliveButton.Enabled = false;
                     _disconnectButton.Enabled = result.IsRunning;
@@ -1347,19 +1361,44 @@ namespace EcloudLite.UI
                 SetStatus("当前没有正在运行的云电脑窗口", true);
                 return;
             }
-            DialogResult choice = MessageBox.Show(
-                this,
-                "是否与云电脑断开连接？如长时间未连接使用，云电脑将会被关机，请及时保存正在进行的工作。",
-                "断开云电脑",
-                MessageBoxButtons.OKCancel,
-                MessageBoxIcon.Warning);
+            RequestDisconnect(session, "lite disconnect button", false);
+        }
+
+        private void RequestDisconnect(CmssLaunchResult session, string source, bool preferRendererOwner)
+        {
+            if (session == null || !session.IsRunning)
+            {
+                Logger.Warn("CMSS", "native renderer disconnect ignored; no running session source=" + source);
+                return;
+            }
+            Logger.Info("CMSS", "native renderer disconnect requested pid=" + session.ProcessId + " source=" + source);
+            IntPtr rendererHandle = preferRendererOwner ? session.GetMainWindowHandle() : IntPtr.Zero;
+            IWin32Window dialogOwner = rendererHandle != IntPtr.Zero
+                ? new WindowHandleOwner(rendererHandle)
+                : (IWin32Window)this;
+            Logger.Info("CMSS", "native renderer disconnect dialog owner=" +
+                (rendererHandle == IntPtr.Zero ? "lite" : "renderer") +
+                " hwnd=0x" + dialogOwner.Handle.ToInt64().ToString("x") +
+                " pid=" + session.ProcessId + " source=" + source);
+            DialogResult choice;
+            try
+            {
+                choice = ShowDisconnectConfirmation(dialogOwner);
+            }
+            catch (Exception exception)
+            {
+                Logger.Exception("CMSS", exception, "renderer-owned disconnect dialog failed; retrying with Lite owner pid=" + session.ProcessId);
+                choice = ShowDisconnectConfirmation(this);
+            }
             if (choice != DialogResult.OK)
             {
-                Logger.Info("CMSS", "native renderer disconnect cancelled by user pid=" + session.ProcessId);
+                Logger.Info("CMSS", "native renderer disconnect cancelled by user pid=" + session.ProcessId + " source=" + source);
                 return;
             }
 
-            Logger.Info("CMSS", "native renderer disconnect confirmed pid=" + session.ProcessId);
+            Logger.Info("CMSS", "native renderer disconnect confirmed pid=" + session.ProcessId + " source=" + source);
+            if (session.ControlServer != null)
+                session.ControlServer.ToolbarActionReceived -= CmssToolbarActionReceived;
             session.Ended -= CmssSessionEnded;
             session.Dispose();
             if (ReferenceEquals(_cmssSession, session)) _cmssSession = null;
@@ -1369,11 +1408,68 @@ namespace EcloudLite.UI
             SetStatus("已断开云电脑", false);
         }
 
+        private static DialogResult ShowDisconnectConfirmation(IWin32Window owner)
+        {
+            return MessageBox.Show(
+                owner,
+                "是否与云电脑断开连接？如长时间未连接使用，云电脑将会被关机，请及时保存正在进行的工作。",
+                "断开云电脑",
+                MessageBoxButtons.OKCancel,
+                MessageBoxIcon.Warning);
+        }
+
+        private void CmssToolbarActionReceived(string action)
+        {
+            CmssLaunchResult session = _cmssSession;
+            Logger.Info("UI", "CMSS toolbar action dispatch action=" + action +
+                " session_pid=" + (session == null ? 0 : session.ProcessId));
+            if (string.Equals(action, "minimize", StringComparison.OrdinalIgnoreCase))
+            {
+                bool minimized = session != null && session.MinimizeWindow();
+                Logger.Info("UI", "CMSS toolbar minimize handled=" + minimized +
+                    " session_pid=" + (session == null ? 0 : session.ProcessId));
+                return;
+            }
+            if (string.Equals(action, "quit", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(action, "exit", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(action, "disconnect", StringComparison.OrdinalIgnoreCase))
+            {
+                if (Interlocked.Exchange(ref _runtimeDisconnectRequestPending, 1) != 0)
+                {
+                    Logger.Info("UI", "duplicate CMSS toolbar disconnect ignored action=" + action);
+                    return;
+                }
+                if (IsDisposed || Disposing || !IsHandleCreated)
+                {
+                    Interlocked.Exchange(ref _runtimeDisconnectRequestPending, 0);
+                    Logger.Warn("UI", "CMSS toolbar disconnect ignored; main window unavailable action=" + action);
+                    return;
+                }
+                try
+                {
+                    BeginInvoke(new Action(delegate
+                    {
+                        try { RequestDisconnect(_cmssSession, "runtime toolbar action=" + action, true); }
+                        finally { Interlocked.Exchange(ref _runtimeDisconnectRequestPending, 0); }
+                    }));
+                }
+                catch (Exception exception)
+                {
+                    Interlocked.Exchange(ref _runtimeDisconnectRequestPending, 0);
+                    Logger.Exception("UI", exception, "CMSS toolbar disconnect dispatch failed action=" + action);
+                }
+                return;
+            }
+            Logger.Info("UI", "CMSS toolbar action intentionally unsupported action=" + action);
+        }
+
         private void CmssSessionEnded(object sender, EventArgs e)
         {
             CmssLaunchResult ended = sender as CmssLaunchResult;
             SafeBeginInvoke(delegate
             {
+                if (ended != null && ended.ControlServer != null)
+                    ended.ControlServer.ToolbarActionReceived -= CmssToolbarActionReceived;
                 if (ended != null) ended.Ended -= CmssSessionEnded;
                 if (ReferenceEquals(_cmssSession, ended)) _cmssSession = null;
                 _disconnectButton.Enabled = false;
@@ -1593,6 +1689,8 @@ namespace EcloudLite.UI
             if (_cmssSession != null)
             {
                 Logger.Info("UI", "main window closing; cleaning owned CMSS session pid=" + _cmssSession.ProcessId);
+                if (_cmssSession.ControlServer != null)
+                    _cmssSession.ControlServer.ToolbarActionReceived -= CmssToolbarActionReceived;
                 _cmssSession.Ended -= CmssSessionEnded;
                 _cmssSession.Dispose();
                 _cmssSession = null;

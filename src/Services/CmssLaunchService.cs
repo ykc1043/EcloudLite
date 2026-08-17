@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
@@ -17,6 +18,9 @@ namespace EcloudLite.Services
 {
     internal sealed class CmssLaunchResult : IDisposable
     {
+        private const int SwMinimize = 6;
+        private const uint WmSysCommand = 0x0112;
+        private const uint ScMinimize = 0xF020;
         private int _stopped;
         private int _endedRaised;
         private readonly object _stopGate = new object();
@@ -32,6 +36,12 @@ namespace EcloudLite.Services
         public CmssControlServer ControlServer { get; set; }
         public string PortableProfileRoot { get; set; }
         public event EventHandler Ended;
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindowAsync(IntPtr windowHandle, int command);
+
+        [DllImport("user32.dll")]
+        private static extern bool PostMessage(IntPtr windowHandle, uint message, IntPtr wParam, IntPtr lParam);
 
         public bool IsRunning
         {
@@ -62,6 +72,58 @@ namespace EcloudLite.Services
                 Name = "EcloudLite-CMSS-Native-Monitor"
             };
             monitor.Start();
+        }
+
+        public bool MinimizeWindow()
+        {
+            Process process = Process;
+            if (process == null)
+            {
+                Logger.Warn("CMSS", "native minimize skipped; process is unavailable pid=" + ProcessId);
+                return false;
+            }
+            try
+            {
+                process.Refresh();
+                if (process.HasExited)
+                {
+                    Logger.Warn("CMSS", "native minimize skipped; renderer already exited pid=" + ProcessId);
+                    return false;
+                }
+                IntPtr handle = GetMainWindowHandle();
+                if (handle == IntPtr.Zero)
+                {
+                    Logger.Warn("CMSS", "native minimize failed; main window handle is zero pid=" + ProcessId);
+                    return false;
+                }
+                bool shown = ShowWindowAsync(handle, SwMinimize);
+                bool posted = shown || PostMessage(handle, WmSysCommand, new IntPtr(ScMinimize), IntPtr.Zero);
+                Logger.Info("CMSS", "native minimize dispatched pid=" + ProcessId +
+                    " hwnd=0x" + handle.ToInt64().ToString("x") +
+                    " show_window=" + shown + " fallback_post=" + (!shown && posted) + " success=" + posted);
+                return posted;
+            }
+            catch (Exception exception)
+            {
+                Logger.Exception("CMSS", exception, "native minimize failed pid=" + ProcessId);
+                return false;
+            }
+        }
+
+        public IntPtr GetMainWindowHandle()
+        {
+            Process process = Process;
+            if (process == null) return IntPtr.Zero;
+            try
+            {
+                process.Refresh();
+                return process.HasExited ? IntPtr.Zero : process.MainWindowHandle;
+            }
+            catch (Exception exception)
+            {
+                Logger.Exception("CMSS", exception, "native main window handle lookup failed pid=" + ProcessId);
+                return IntPtr.Zero;
+            }
         }
 
         private void MonitorLoop(Process process)
@@ -521,6 +583,8 @@ namespace EcloudLite.Services
         private volatile bool _stopping;
         private int _heartbeats;
 
+        public event Action<string> ToolbarActionReceived;
+
         public CmssControlServer(string machineId, string companyCode)
         {
             _machineId = machineId ?? string.Empty;
@@ -622,9 +686,69 @@ namespace EcloudLite.Services
             }
             uint type = BitConverter.ToUInt32(frame, 0);
             uint jsonLength = BitConverter.ToUInt32(frame, 4);
+            int availableJsonBytes = frame.Length - 8;
+            if (jsonLength > availableJsonBytes)
+            {
+                Logger.Warn("CMSSCTRL", "invalid control frame type=" + type + " frame_bytes=" + frame.Length +
+                    " json_len=" + jsonLength + " available_json_bytes=" + availableJsonBytes);
+                return;
+            }
             if (type == 1) Interlocked.Increment(ref _heartbeats);
             Logger.Info("CMSSCTRL", "control message type=" + type + " frame_bytes=" + frame.Length + " json_len=" + jsonLength +
                 " heart_count=" + _heartbeats + " machine=" + Logger.ShortId(_machineId) + " company=" + _companyCode);
+            if (type == 1010 && jsonLength > 0)
+                ProcessToolbarMessage(frame, (int)jsonLength, availableJsonBytes);
+        }
+
+        private void ProcessToolbarMessage(byte[] frame, int jsonLength, int availableJsonBytes)
+        {
+            try
+            {
+                string jsonText = Encoding.UTF8.GetString(frame, 8, jsonLength);
+                JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+                Dictionary<string, object> root = json.Deserialize<Dictionary<string, object>>(jsonText);
+                Dictionary<string, object> data = GetDictionary(root, "data");
+                Dictionary<string, object> messageData = GetDictionary(data, "msg_data");
+                int messageType = GetInt32(data, "msg_type", -1);
+                string action = GetString(messageData, "action");
+                Logger.Info("CMSSCTRL", "toolbar message parsed msg_type=" + messageType +
+                    " action=" + (string.IsNullOrEmpty(action) ? "(empty)" : action) +
+                    " json_bytes=" + jsonLength + " trailing_bytes=" + (availableJsonBytes - jsonLength));
+                if (messageType != 10 || string.IsNullOrWhiteSpace(action)) return;
+
+                action = action.Trim().ToLowerInvariant();
+                Logger.Info("CMSSCTRL", "toolbar action received action=" + action +
+                    " machine=" + Logger.ShortId(_machineId) + " company=" + _companyCode);
+                Action<string> handler = ToolbarActionReceived;
+                if (handler != null) handler(action);
+            }
+            catch (Exception exception)
+            {
+                Logger.Exception("CMSSCTRL", exception, "toolbar message parse failed json_bytes=" + jsonLength);
+            }
+        }
+
+        private static Dictionary<string, object> GetDictionary(Dictionary<string, object> source, string key)
+        {
+            if (source == null) return null;
+            object value;
+            return source.TryGetValue(key, out value) ? value as Dictionary<string, object> : null;
+        }
+
+        private static string GetString(Dictionary<string, object> source, string key)
+        {
+            if (source == null) return string.Empty;
+            object value;
+            return source.TryGetValue(key, out value) && value != null ? Convert.ToString(value) : string.Empty;
+        }
+
+        private static int GetInt32(Dictionary<string, object> source, string key, int fallback)
+        {
+            if (source == null) return fallback;
+            object value;
+            if (!source.TryGetValue(key, out value) || value == null) return fallback;
+            try { return Convert.ToInt32(value); }
+            catch { return fallback; }
         }
 
         public void Dispose()
